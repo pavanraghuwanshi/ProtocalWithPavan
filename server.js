@@ -126,22 +126,22 @@ const options = {
 
 // --- Parsers for GT06 packets ---
 function parseLatitude(data) {
-  // Latitude = 4 bytes after datetime(6) + satellites(1) = start at byte 11
+  // Latitude starts at byte 11 (after datetime + satellites)
   return data.readUInt32BE(11) / 1800000;
 }
 
 function parseLongitude(data) {
-  // Longitude = next 4 bytes after latitude
+  // Longitude starts at byte 15
   return data.readUInt32BE(15) / 1800000;
 }
 
 function parseSpeed(data) {
-  // Speed byte right after longitude
+  // Speed is 1 byte after longitude
   return data[19];
 }
 
 function parseCourse(data) {
-  // Course = 2 bytes after speed (lower 10 bits are valid)
+  // Course is 2 bytes after speed (lower 10 bits valid)
   return data.readUInt16BE(20) & 0x03FF;
 }
 
@@ -154,7 +154,7 @@ const server = gps.server(options, (device, connection) => {
   });
 
   device.on('login', function () {
-    console.log('Device logged in:', this.uid);
+    console.log('✅ Device logged in:', this.uid);
   });
 
   device.on('ping', function (data) {
@@ -164,13 +164,14 @@ const server = gps.server(options, (device, connection) => {
 
   // Listen for all data packets from the device
   device.on('data', function (data) {
-    const protocolNumber = data[3]; // GT06 protocol number
+    const protocolNumber = data[4]; // ✅ GT06 protocol number is at index 4
     const timestamp = new Date().toLocaleString();
 
     if (protocolNumber === 0x13) {
       // Heartbeat
-      console.log(`❤️ Heartbeat received from device ${device.uid} at ${timestamp}`);
-    } else if (protocolNumber === 0x12 || protocolNumber === 0x10 || protocolNumber === 0x94) {
+      console.log(`❤️ Heartbeat from ${device.uid} at ${timestamp}`);
+    } 
+    else if (protocolNumber === 0x12 || protocolNumber === 0x10 || protocolNumber === 0x94) {
       // GPS Location
       try {
         const lat = parseLatitude(data);
@@ -187,9 +188,10 @@ const server = gps.server(options, (device, connection) => {
         console.error("❌ Error parsing GPS data:", err);
         console.log("Raw packet:", data.toString('hex'));
       }
-    } else {
-      // Other data (alarms, status, etc.)
-      console.log(`📡 Data received from device ${device.uid} at ${timestamp}:`, data.toString('hex'));
+    } 
+    else {
+      // Other packets (status, alarms, etc.)
+      console.log(`📡 Data from device ${device.uid} at ${timestamp}:`, data.toString('hex'));
     }
   });
 });
