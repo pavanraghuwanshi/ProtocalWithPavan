@@ -114,49 +114,34 @@ console.log('GT06 test server running on port 5001');
 // server.setDebug(true);
 // console.log('GPS server running on port', options.port);
 
-
 const gps = require('./index');
 
 // GT06/PT06 options
 const options = {
   debug: true,
   port: 5001,
-  device_adapter: "GT06"   // PT06 bhi isi adapter ka variation hai
+  device_adapter: "GT06"   // PT06 is compatible with GT06 protocol
 };
 
 // --- Parsers for PT06 packets ---
-// Utility: convert BCD (hex-coded) to decimal
-function bcdToDecimal(bcdBuffer) {
-  let str = "";
-  for (let i = 0; i < bcdBuffer.length; i++) {
-    let byte = bcdBuffer[i];
-    str += (byte >> 4).toString(16);
-    str += (byte & 0x0f).toString(16);
-  }
-  return parseFloat(str);
-}
-
+// Convert 4 bytes to integer (latitude/longitude) and divide by 1800000
 function parseLatitude(data) {
-  // PT06: latitude bytes start around 9th byte (after date + sat)
-  // usually 4 bytes
-  const latRaw = data.slice(9, 13);  
-  const lat = bcdToDecimal(latRaw) / 1000000; 
-  return lat;
+  // PT06: latitude 4 bytes start after IMEI/device ID
+  const latRaw = data.readUInt32BE(12); // bytes 12-15
+  return latRaw / 1800000;
 }
 
 function parseLongitude(data) {
-  // next 4 bytes
-  const lonRaw = data.slice(13, 17);
-  const lon = bcdToDecimal(lonRaw) / 1000000;
-  return lon;
+  const lonRaw = data.readUInt32BE(16); // bytes 16-19
+  return lonRaw / 1800000;
 }
 
 function parseSpeed(data) {
-  return data[data.length - 6]; // usually speed is last few bytes before checksum
+  return data[20]; // byte 20 usually holds speed in km/h
 }
 
 function parseCourse(data) {
-  return 0; // optional, we can refine later
+  return data.readUInt16BE(21); // byte 21-22 = course/direction
 }
 
 // --- GPS Server Setup ---
@@ -177,7 +162,7 @@ const server = gps.server(options, (device, connection) => {
   });
 
   device.on('data', function (data) {
-    const protocolNumber = data[4]; 
+    const protocolNumber = data[3]; 
     const timestamp = new Date().toLocaleString();
 
     if (protocolNumber === 0x13) {
