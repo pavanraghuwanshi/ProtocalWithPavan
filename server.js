@@ -170,7 +170,7 @@ const server = gps.server(options, (device, connection) => {
     if (protocolNumber === 0x13) {
       // Heartbeat
       console.log(`❤️ Heartbeat received from device ${device.uid} at ${timestamp}`);
-    } else if (protocolNumber === 0x12 || protocolNumber === 0x10) {
+    } else if (protocolNumber === 0x12 || protocolNumber === 0x10 || protocolNumber === 0x94) {
       // GPS Location
       try {
         const lat = parseLatitude(data);
