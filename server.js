@@ -114,61 +114,68 @@ console.log('GT06 test server running on port 5001');
 // server.setDebug(true);
 // console.log('GPS server running on port', options.port);
 
+
 const gps = require('./index');
 
 // GT06/PT06 options
 const options = {
   debug: true,
   port: 5001,
-  device_adapter: "GT06"   // PT06 is compatible with GT06 protocol
+  device_adapter: "GT06" // PT06 compatible
 };
 
-// --- Parsers for PT06 packets ---
-// Convert 4 bytes to integer (latitude/longitude) and divide by 1800000
+// --- Utility: convert 4 bytes to latitude/longitude ---
 function parseLatitude(data) {
-  // PT06: latitude 4 bytes start after IMEI/device ID
-  const latRaw = data.readUInt32BE(12); // bytes 12-15
-  return latRaw / 1800000;
+  // Latitude bytes 9-12 (0-indexed)
+  return data.readUInt32BE(9) / 1800000;
 }
 
 function parseLongitude(data) {
-  const lonRaw = data.readUInt32BE(16); // bytes 16-19
-  return lonRaw / 1800000;
+  // Longitude bytes 13-16 (0-indexed)
+  return data.readUInt32BE(13) / 1800000;
 }
 
 function parseSpeed(data) {
-  return data[20]; // byte 20 usually holds speed in km/h
+  // Speed byte (usually 17th byte)
+  return data[17];
 }
 
 function parseCourse(data) {
-  return data.readUInt16BE(21); // byte 21-22 = course/direction
+  // Course / direction (18-19 bytes)
+  return data.readUInt16BE(18);
 }
 
 // --- GPS Server Setup ---
 const server = gps.server(options, (device, connection) => {
 
-  device.on('login_request', function (device_id, msg_parts) {
+  // Login request
+  device.on('login_request', function(device_id, msg_parts) {
     console.log(`#${device_id}: Device requesting login`);
     this.login_authorized(true);
   });
 
-  device.on('login', function () {
+  // Successful login
+  device.on('login', function() {
     console.log(`✅ Device logged in: ${this.uid}`);
   });
 
-  device.on('ping', function (data) {
-    console.log('Ping (raw hex):', data.toString('hex'));
+  // Ping packet
+  device.on('ping', function(data) {
+    console.log(`📩 Ping received from ${device.uid}:`, data.toString('hex'));
     return data;
   });
 
-  device.on('data', function (data) {
-    const protocolNumber = data[3]; 
+  // Handle all data packets
+  device.on('data', function(data) {
+    const protocolNumber = data[3]; // Protocol number
     const timestamp = new Date().toLocaleString();
 
     if (protocolNumber === 0x13) {
+      // Heartbeat packet
       console.log(`❤️ Heartbeat from ${device.uid} at ${timestamp}`);
     } 
     else if (protocolNumber === 0x12 || protocolNumber === 0x10 || protocolNumber === 0x94) {
+      // GPS data packet
       try {
         const lat = parseLatitude(data);
         const lon = parseLongitude(data);
@@ -176,20 +183,22 @@ const server = gps.server(options, (device, connection) => {
         const course = parseCourse(data);
 
         console.log(`📍 GPS data from ${device.uid} at ${timestamp}`);
-        console.log(`   Latitude: ${lat}`);
+        console.log(`   Latitude : ${lat}`);
         console.log(`   Longitude: ${lon}`);
-        console.log(`   Speed: ${speed} km/h`);
-        console.log(`   Course: ${course}°`);
+        console.log(`   Speed    : ${speed} km/h`);
+        console.log(`   Course   : ${course}°`);
       } catch (err) {
         console.error("❌ Error parsing GPS data:", err);
         console.log("Raw packet:", data.toString('hex'));
       }
     } 
     else {
-      console.log(`📡 Data from ${device.uid} at ${timestamp}:`, data.toString('hex'));
+      // Any other packet (alerts, LBS, etc.)
+      console.log(`📡 Other data from ${device.uid} at ${timestamp}:`, data.toString('hex'));
     }
   });
+
 });
 
 server.setDebug(true);
-console.log('🚀 GPS server running on port', options.port);
+console.log('🚀 PT06 GPS server running on port', options.port);
