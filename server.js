@@ -16,26 +16,35 @@ function isValidLatLon(lat, lon) {
 }
 
 // Parse GPS packet (protocol 0x22)
-function parseGpsPacket(buf) {
-  try {
-    const date = buf.slice(4, 10); // datetime
-    const sats = buf[10];
-    const latRaw = buf.readUInt32BE(11);
-    const lonRaw = buf.readUInt32BE(15);
-    const speed = buf[19];
-    const courseStatus = buf.readUInt16BE(20);
+function parseGps22(buf) {
+  const latRaw = buf.readUInt32BE(11);
+  const lonRaw = buf.readUInt32BE(15);
+  const speed = buf[19];
+  const courseStatus = buf.readUInt16BE(20);
 
-    const lat = latRaw / 30000 / 60;
-    const lon = lonRaw / 30000 / 60;
-    const course = courseStatus & 0x03FF; // lower 10 bits
+  const lat = latRaw / 30000 / 60;
+  const lon = lonRaw / 30000 / 60;
+  const course = courseStatus & 0x03FF;
 
-    return { lat, lon, speed, course, sats, raw: hex(buf) };
-  } catch (e) {
-    return null;
-  }
+  return { lat, lon, speed, course };
 }
 
-// Simple buffer reassembler
+// Parse GPS packet (protocol 0x26)
+function parseGps26(buf) {
+  // Same structure, but shifted
+  const latRaw = buf.readUInt32BE(11);
+  const lonRaw = buf.readUInt32BE(15);
+  const speed = buf[19];
+  const courseStatus = buf.readUInt16BE(20);
+
+  const lat = latRaw / 30000 / 60;
+  const lon = lonRaw / 30000 / 60;
+  const course = courseStatus & 0x03FF;
+
+  return { lat, lon, speed, course };
+}
+
+// Simple packet reassembler
 class PacketAssembler {
   constructor(onPacket) {
     this.buffer = Buffer.alloc(0);
@@ -56,15 +65,11 @@ class PacketAssembler {
         len = this.buffer.readUInt16BE(2);
         fullLen = 2 + 2 + len + 2;
       } else {
-        // drop junk
         this.buffer = this.buffer.slice(1);
         continue;
       }
 
-      if (this.buffer.length < fullLen) {
-        // not enough yet
-        break;
-      }
+      if (this.buffer.length < fullLen) break;
 
       const packet = this.buffer.slice(0, fullLen);
       this.buffer = this.buffer.slice(fullLen);
@@ -90,13 +95,11 @@ const server = net.createServer((socket) => {
 
     const ts = new Date().toLocaleString();
 
-    // Handle packets
     if (protocol === 0x01) {
       // Login
       const imei = packet.slice(4, 12).toString("hex");
       console.log(`✅ Login request from IMEI: ${imei} at ${ts}`);
 
-      // Reply login success
       const loginAck = Buffer.from("787805010001d9dc0d0a", "hex");
       socket.write(loginAck);
 
@@ -107,35 +110,40 @@ const server = net.createServer((socket) => {
       socket.write(hbAck);
 
     } else if (protocol === 0x22) {
-      // GPS
-      const gps = parseGpsPacket(packet);
-      if (gps && isValidLatLon(gps.lat, gps.lon)) {
-        console.log(`📍 GPS at ${ts}`);
+      // Standard GPS
+      const gps = parseGps22(packet);
+      if (isValidLatLon(gps.lat, gps.lon)) {
+        console.log(`📍 GPS (0x22) at ${ts}`);
         console.log(`   Latitude : ${gps.lat}`);
         console.log(`   Longitude: ${gps.lon}`);
         console.log(`   Speed    : ${gps.speed} km/h`);
         console.log(`   Course   : ${gps.course}°`);
       } else {
-        console.log(`⚠️ Could not parse GPS packet: ${hex(packet)}`);
+        console.log(`⚠️ GPS (0x22) no fix yet: ${hex(packet)}`);
+      }
+
+    } else if (protocol === 0x26) {
+      // Extended GPS/Status
+      const gps = parseGps26(packet);
+      if (isValidLatLon(gps.lat, gps.lon)) {
+        console.log(`📍 GPS (0x26) at ${ts}`);
+        console.log(`   Latitude : ${gps.lat}`);
+        console.log(`   Longitude: ${gps.lon}`);
+        console.log(`   Speed    : ${gps.speed} km/h`);
+        console.log(`   Course   : ${gps.course}°`);
+      } else {
+        console.log(`⚠️ GPS (0x26) no fix yet: ${hex(packet)}`);
       }
 
     } else {
-      // Other data (0x94, alerts, etc.)
-      console.log(`📡 Other data at ${ts}: ${hex(packet)}`);
+      console.log(`📡 Other data (protocol=${protocol}) at ${ts}: ${hex(packet)}`);
     }
   });
 
-  socket.on("data", (data) => {
-    assembler.feed(data);
-  });
+  socket.on("data", (data) => assembler.feed(data));
 
-  socket.on("error", (err) => {
-    console.warn("⚠️ Socket error:", err.message);
-  });
-
-  socket.on("close", () => {
-    console.log("🔌 Device disconnected");
-  });
+  socket.on("error", (err) => console.warn("⚠️ Socket error:", err.message));
+  socket.on("close", () => console.log("🔌 Device disconnected"));
 });
 
 server.listen(PORT, () => {
