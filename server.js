@@ -1,312 +1,143 @@
-// const gps = require('./index');
-
-// const options = {
-//   debug: true,
-//   port: 5001,
-//   device_adapter: "GT06"
-// };
-
-// const server = gps.server(options, (device, connection) => {
-
-//   device.on('login_request', function(device_id, msg_parts) {
-//     console.log('Device trying to login:', device_id);
-//     this.login_authorized(true);
-//   });
-
-//   device.on('login', function() {
-//     console.log('Device logged in:', this.uid);
-//   });
-
-//   device.on('ping', function(data) {
-//     console.log('Ping from device:', data.toString('hex'));
-//     return data;
-//   });
-
-//   // Listen for all data packets from the device
-//   device.on('data', function(data) {
-//     const protocolNumber = data[3]; // GT06 protocol number
-//     const timestamp = new Date().toLocaleString();
-
-//     if (protocolNumber === 0x13) {
-//       // Heartbeat packet
-//       console.log(`❤️ Heartbeat received from device ${device.uid} at ${timestamp}`);
-//     } else {
-//       // Other packets (login, GPS, etc.)
-//       console.log(`📡 Data received from device ${device.uid} at ${timestamp}:`, data.toString('hex'));
-//     }
-//   });
-// });
-
-// server.setDebug(true);
-// console.log('GPS server running on port', options.port);
-
-console.log('GT06 test server running on port 5001');
-
-
-
-// const gps = require('./index');
-
-// // GT06/PT06 options
-// const options = {
-//   debug: true,
-//   port: 5001,
-//   device_adapter: "GT06"
-// };
-
-// function parseLatitude(data) {
-//   return data.readUInt32BE(7) / 1000000;
-// }
-
-// function parseLongitude(data) {
-//   return data.readUInt32BE(11) / 1000000;
-// }
-
-// function parseSpeed(data) {
-//   return data[15];
-// }
-
-// function parseCourse(data) {
-//   return data.readUInt16BE(16);
-// }
-
-// const server = gps.server(options, (device, connection) => {
-
-//   device.on('login_request', function(device_id, msg_parts) {
-//     console.log('Device trying to login:', device_id);
-//     this.login_authorized(true);
-//   });
-
-//   device.on('login', function() {
-//     console.log('Device logged in:', this.uid);
-//   });
-
-//   device.on('ping', function(data) {
-//     console.log('Ping from device:', data.toString('hex'));
-//     return data;
-//   });
-
-//   // Listen for all packets
-//   device.on('data', function(data) {
-//     const protocolNumber = data[3]; // Protocol number
-//     const timestamp = new Date().toLocaleString();
-
-//     if (protocolNumber === 0x13) {
-//       // Heartbeat
-//       console.log(`❤️ Heartbeat received from device ${device.uid} at ${timestamp}`);
-//     } else if (protocolNumber === 0x12 || protocolNumber === 0x10) {
-//       // GPS location
-//       const lat = parseLatitude(data);
-//       const lon = parseLongitude(data);
-//       const speed = parseSpeed(data);
-//       const course = parseCourse(data);
-
-//       console.log(`📍 GPS data from device ${device.uid} at ${timestamp}`);
-//       console.log(`   Latitude: ${lat}`);
-//       console.log(`   Longitude: ${lon}`);
-//       console.log(`   Speed: ${speed} km/h`);
-//       console.log(`   Course: ${course}°`);
-//     } else {
-//       console.log(`📡 Data received from device ${device.uid} at ${timestamp}:`, data.toString('hex'));
-//     }
-//   });
-// });
-
-// server.setDebug(true);
-// console.log('GPS server running on port', options.port);
-
-
-
 // server.js
-const gps = require('./index');
+const net = require("net");
 
-const options = {
-  debug: true,
-  port: 5001,
-  device_adapter: "GT06"
-};
+const PORT = 5001;
 
-// Helper: check valid lat/lon range
-function isValidLatLon(lat, lon) {
-  return Number.isFinite(lat) && Number.isFinite(lon) &&
-         lat <= 90 && lat >= -90 && lon <= 180 && lon >= -180;
-}
-
-// Try standard PT06 (7878) offsets first, then fallback to scanning buffer for plausible lat/lon
-function findLatLonAndMeta(buffer) {
-  // Candidate parsing strategies (offset-based)
-  const candidates = [
-    // common 7878 layout (latitude bytes 12-15, longitude 16-19)
-    { latIndex: 12, lonIndex: 16, speedIndexOffset: 8, courseIndexOffset: 9 },
-    // alternative 7878 variant (lat 9-12, lon 13-16) - some firmwares
-    { latIndex: 9, lonIndex: 13, speedIndexOffset: 8, courseIndexOffset: 9 },
-    // later/extended variant where lat starts later (used for 7979/0x94 sometimes)
-    { latIndex: 20, lonIndex: 24, speedIndexOffset: 8, courseIndexOffset: 9 }
-  ];
-
-  // Try candidates first
-  for (const c of candidates) {
-    if (buffer.length >= c.lonIndex + 4) {
-      try {
-        const latRaw = buffer.readUInt32BE(c.latIndex);
-        const lonRaw = buffer.readUInt32BE(c.lonIndex);
-        const lat = latRaw / 1800000;
-        const lon = lonRaw / 1800000;
-        if (isValidLatLon(lat, lon)) {
-          const speed = (buffer.length > (c.latIndex + c.speedIndexOffset)) ? buffer[c.latIndex + c.speedIndexOffset] : null;
-          const course = (buffer.length > (c.latIndex + c.courseIndexOffset + 1)) ? buffer.readUInt16BE(c.latIndex + c.courseIndexOffset) : null;
-          return { lat, lon, speed, course, foundAt: c.latIndex };
-        }
-      } catch (e) {
-        // ignore read errors and continue
-      }
-    }
-  }
-
-  // Fallback: brute force scan the buffer for any 8-byte pair that gives plausible lat & lon
-  for (let i = 0; i + 8 <= buffer.length; i++) {
-    try {
-      const latRaw = buffer.readUInt32BE(i);
-      const lonRaw = buffer.readUInt32BE(i + 4);
-      const lat = latRaw / 1800000;
-      const lon = lonRaw / 1800000;
-      if (isValidLatLon(lat, lon)) {
-        const speed = (buffer.length > i + 8) ? buffer[i + 8] : null;
-        const course = (buffer.length > i + 9) ? buffer.readUInt16BE(i + 9) : null;
-        return { lat, lon, speed, course, foundAt: i };
-      }
-    } catch (e) {
-      // if readUInt32BE fails near buffer end, continue
-    }
-  }
-
-  // nothing found
-  return null;
-}
-
-// small helper to print hex nicely
+// Helper: hex print
 function hex(buf) {
-  return Buffer.isBuffer(buf) ? buf.toString('hex') : String(buf);
+  return Buffer.isBuffer(buf) ? buf.toString("hex") : String(buf);
 }
 
-// Server setup
-const server = gps.server(options, (device, connection) => {
+// Validate lat/lon
+function isValidLatLon(lat, lon) {
+  return Number.isFinite(lat) &&
+    lat <= 90 && lat >= -90 &&
+    lon <= 180 && lon >= -180;
+}
 
-  // login request: set device.uid (safe) and authorize
-  device.on('login_request', function (device_id, msg_parts) {
-    console.log(`#${device_id}: Device requesting login`);
-    try {
-      // ensure the device receives an authorization success
-      this.login_authorized(true);
-      // set uid so later logs show IMEI even if adapter doesn't
-      this.uid = device_id || this.uid || '';
-    } catch (e) {
-      console.warn("⚠️ login_authorized error:", e);
-    }
-  });
+// Parse GPS packet (protocol 0x22)
+function parseGpsPacket(buf) {
+  try {
+    const date = buf.slice(4, 10); // datetime
+    const sats = buf[10];
+    const latRaw = buf.readUInt32BE(11);
+    const lonRaw = buf.readUInt32BE(15);
+    const speed = buf[19];
+    const courseStatus = buf.readUInt16BE(20);
 
-  device.on('login', function () {
-    // adapter might have already set this.uid to IMEI
-    console.log(`✅ Device logged in: ${this.uid || 'unknown'}`);
-  });
+    const lat = latRaw / 30000 / 60;
+    const lon = lonRaw / 30000 / 60;
+    const course = courseStatus & 0x03FF; // lower 10 bits
 
-  device.on('ping', function (data) {
-    console.log(`📩 Ping (raw hex) from ${device.uid || 'unknown'}: ${hex(data)}`);
-    return data;
-  });
+    return { lat, lon, speed, course, sats, raw: hex(buf) };
+  } catch (e) {
+    return null;
+  }
+}
 
-  // catch low-level connection errors so server doesn't crash
-  if (connection && connection.socket) {
-    connection.socket.on('error', (err) => {
-      console.warn(`⚠️ Connection socket error for ${device.uid || 'unknown'}:`, err && err.message ? err.message : err);
-    });
-    connection.socket.on('close', () => {
-      console.log(`🔌 Connection closed for ${device.uid || 'unknown'}`);
-    });
+// Simple buffer reassembler
+class PacketAssembler {
+  constructor(onPacket) {
+    this.buffer = Buffer.alloc(0);
+    this.onPacket = onPacket;
   }
 
-  device.on('data', function (data) {
-    // Determine frame type and protocol:
-    //  - 78 78 frames: protocol at data[3]
-    //  - 79 79 frames: length is two bytes, protocol at data[4] (extended)
-    const ts = new Date().toLocaleString();
-    if (!Buffer.isBuffer(data)) data = Buffer.from(data);
+  feed(data) {
+    this.buffer = Buffer.concat([this.buffer, data]);
 
-    const start = data.length >= 2 ? data.slice(0, 2).toString('hex') : '';
-    let protocolNumber = null;
-    if (start === '7878') {
-      protocolNumber = data.length >= 4 ? data[3] : null;
-    } else if (start === '7979') {
-      // extended 79 frames: protocol typically at byte 4
-      protocolNumber = data.length >= 5 ? data[4] : null;
-    } else {
-      // unknown frame start, but try to read protocol at 3 anyway
-      protocolNumber = data.length >= 4 ? data[3] : null;
-    }
+    while (this.buffer.length >= 5) {
+      let start = this.buffer.slice(0, 2).toString("hex");
+      let len, fullLen;
 
-    // Log raw for debug
-    // console.log(`RAW packet (${start}) protocol=${protocolNumber} from ${device.uid || 'unknown'}: ${hex(data)}`);
-
-    // Handle heartbeat (0x13)
-    if (protocolNumber === 0x13) {
-      console.log(`❤️ Heartbeat from ${device.uid || 'unknown'} at ${ts}`);
-      // Optionally respond with heartbeat ack (GT06 style) - safe static response used by many libs
-      try {
-        const ack = Buffer.from('787805130001d9dc0d0a', 'hex');
-        if (typeof device.send === 'function') device.send(ack);
-        else if (connection && typeof connection.write === 'function') connection.write(ack);
-      } catch (e) {
-        // ignore send errors
-      }
-      return;
-    }
-
-    // Handle standard GPS packets (0x12 / 0x10) and extended 0x94 for PT06
-    if (protocolNumber === 0x12 || protocolNumber === 0x10 || protocolNumber === 0x94) {
-      // try to parse lat/lon with heuristics
-      const found = findLatLonAndMeta(data);
-      if (found) {
-        const { lat, lon, speed, course, foundAt } = found;
-        console.log(`📍 GPS data from ${device.uid || 'unknown'} at ${ts} (foundAt=${foundAt})`);
-        console.log(`   Latitude : ${lat}`);
-        console.log(`   Longitude: ${lon}`);
-        console.log(`   Speed    : ${speed === null ? 'unknown' : speed + ' km/h'}`);
-        console.log(`   Course   : ${course === null ? 'unknown' : course + '°'}`);
-        return;
+      if (start === "7878") {
+        len = this.buffer[2];
+        fullLen = 2 + 1 + len + 2; // start + len + body + stop
+      } else if (start === "7979") {
+        len = this.buffer.readUInt16BE(2);
+        fullLen = 2 + 2 + len + 2;
       } else {
-        // fallback: try known offsets for older devices
-        try {
-          // older 7878-style offsets
-          if (data.length >= 23) {
-            const latRaw = data.readUInt32BE(12);
-            const lonRaw = data.readUInt32BE(16);
-            const lat = latRaw / 1800000;
-            const lon = lonRaw / 1800000;
-            if (isValidLatLon(lat, lon)) {
-              const speed = data[20];
-              const course = data.readUInt16BE(21);
-              console.log(`📍 GPS data (fallback) from ${device.uid || 'unknown'} at ${ts}`);
-              console.log(`   Latitude : ${lat}`);
-              console.log(`   Longitude: ${lon}`);
-              console.log(`   Speed    : ${speed} km/h`);
-              console.log(`   Course   : ${course}°`);
-              return;
-            }
-          }
-        } catch (e) {
-          // ignore fallback parse errors
-        }
-
-        // if still nothing, log raw for debugging
-        console.log(`📡 ${ts} - Unable to parse GPS fields but protocol=${protocolNumber} from ${device.uid || 'unknown'}. Raw: ${hex(data)}`);
-        return;
+        // drop junk
+        this.buffer = this.buffer.slice(1);
+        continue;
       }
+
+      if (this.buffer.length < fullLen) {
+        // not enough yet
+        break;
+      }
+
+      const packet = this.buffer.slice(0, fullLen);
+      this.buffer = this.buffer.slice(fullLen);
+
+      this.onPacket(packet);
+    }
+  }
+}
+
+// Server
+const server = net.createServer((socket) => {
+  console.log("🔌 Device connected:", socket.remoteAddress);
+
+  const assembler = new PacketAssembler((packet) => {
+    const start = packet.slice(0, 2).toString("hex");
+    let protocol = null;
+
+    if (start === "7878") {
+      protocol = packet[3];
+    } else if (start === "7979") {
+      protocol = packet[4];
     }
 
-    // Everything else (alerts, LBS, config, etc.)
-    console.log(`📡 Other data from ${device.uid || 'unknown'} at ${ts}:`, hex(data));
+    const ts = new Date().toLocaleString();
+
+    // Handle packets
+    if (protocol === 0x01) {
+      // Login
+      const imei = packet.slice(4, 12).toString("hex");
+      console.log(`✅ Login request from IMEI: ${imei} at ${ts}`);
+
+      // Reply login success
+      const loginAck = Buffer.from("787805010001d9dc0d0a", "hex");
+      socket.write(loginAck);
+
+    } else if (protocol === 0x13) {
+      // Heartbeat
+      console.log(`❤️ Heartbeat at ${ts}`);
+      const hbAck = Buffer.from("787805130001d9dc0d0a", "hex");
+      socket.write(hbAck);
+
+    } else if (protocol === 0x22) {
+      // GPS
+      const gps = parseGpsPacket(packet);
+      if (gps && isValidLatLon(gps.lat, gps.lon)) {
+        console.log(`📍 GPS at ${ts}`);
+        console.log(`   Latitude : ${gps.lat}`);
+        console.log(`   Longitude: ${gps.lon}`);
+        console.log(`   Speed    : ${gps.speed} km/h`);
+        console.log(`   Course   : ${gps.course}°`);
+      } else {
+        console.log(`⚠️ Could not parse GPS packet: ${hex(packet)}`);
+      }
+
+    } else {
+      // Other data (0x94, alerts, etc.)
+      console.log(`📡 Other data at ${ts}: ${hex(packet)}`);
+    }
   });
 
-}); // end gps.server
+  socket.on("data", (data) => {
+    assembler.feed(data);
+  });
 
-server.setDebug(true);
-console.log('🚀 PT06 GPS server running on port', options.port);
+  socket.on("error", (err) => {
+    console.warn("⚠️ Socket error:", err.message);
+  });
+
+  socket.on("close", () => {
+    console.log("🔌 Device disconnected");
+  });
+});
+
+server.listen(PORT, () => {
+  console.log("🚀 PT06/GT06 server running on port", PORT);
+});
